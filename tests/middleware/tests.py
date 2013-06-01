@@ -2,20 +2,23 @@
 from __future__ import absolute_import, unicode_literals
 
 import gzip
+import zlib
 from io import BytesIO
+from StringIO import StringIO
 import random
 import re
 import warnings
 
 from django.conf import settings
 from django.core import mail
+from django.core.handlers.wsgi import LimitedStream
 from django.db import (transaction, connections, DEFAULT_DB_ALIAS,
                        IntegrityError)
 from django.http import HttpRequest, HttpResponse, StreamingHttpResponse
 from django.middleware.clickjacking import XFrameOptionsMiddleware
 from django.middleware.common import CommonMiddleware, BrokenLinkEmailsMiddleware
 from django.middleware.http import ConditionalGetMiddleware
-from django.middleware.gzip import GZipMiddleware
+from django.middleware.gzip import GZipMiddleware, UnzipRequestMiddleware
 from django.middleware.transaction import TransactionMiddleware
 from django.test import TransactionTestCase, TestCase, RequestFactory
 from django.test.utils import override_settings, IgnorePendingDeprecationWarningsMixin
@@ -674,6 +677,53 @@ class GZipMiddlewareTest(TestCase):
         self.assertEqual(r.content, self.uncompressible_string)
         self.assertEqual(r.get('Content-Encoding'), None)
 
+class UnzipRequestMiddlewareTest(TestCase):
+
+    def setUp(self):
+        self.req = HttpRequest()
+        self.req.META = {
+            'SERVER_NAME': 'testserver',
+            'SERVER_PORT': 80,
+            'HTTP_CONTENT_ENCODING': 'gzip',
+        }
+        self.req.method = 'POST'
+        self.req.path = self.req.path_info = "/"
+
+    def test_decompress_request(self):
+        """
+        Tests that decompression is performed on request with gzip
+        Content-encoding.
+        """
+        compressible_string = b'a' * 500
+
+        compressed_string = zlib.compress(compressible_string)
+        self.req._stream = LimitedStream(StringIO(compressed_string),
+                                         len(compressed_string))
+
+        UnzipRequestMiddleware().process_request(self.req)
+
+        self.assertEqual(self.req.read(), compressible_string)
+
+    def test_no_decompress_undecompressible_request(self):
+        some_string = b"A non compressed string."
+
+        self.req._stream = LimitedStream(StringIO(some_string),
+                                         len(some_string))
+
+        UnzipRequestMiddleware().process_request(self.req)
+
+        self.assertEqual(self.req.read(), some_string)
+
+    def test_no_decompress_big_files(self):
+        big_string = b'a' * (settings.UNZIP_MAX_SIZE + 1)
+
+        compressed_string = zlib.compress(big_string)
+        self.req._stream = LimitedStream(StringIO(compressed_string),
+                                         len(compressed_string))
+
+        res = UnzipRequestMiddleware().process_request(self.req)
+
+        self.assertEqual(res.status_code, 400)
 
 @override_settings(USE_ETAGS=True)
 class ETagGZipMiddlewareTest(TestCase):

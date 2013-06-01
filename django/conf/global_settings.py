@@ -454,6 +454,8 @@ MIDDLEWARE_CLASSES = (
 #     'django.middleware.gzip.GZipMiddleware',
 )
 
+UNZIP_MAX_SIZE = 4096
+
 ############
 # SESSIONS #
 ############
